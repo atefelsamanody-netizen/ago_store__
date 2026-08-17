@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+
 import {
   collection,
   onSnapshot,
@@ -12,6 +13,10 @@ import {
 } from "firebase/firestore";
 
 import { db } from "../../lib/firebase";
+
+/* =========================================================
+   TYPES
+========================================================= */
 
 type Product = {
   id?: string;
@@ -59,10 +64,20 @@ type Order = {
   remainingProducts?: number;
   amountToCollect?: number;
 
+  /* بيانات التحويل */
+  payerAccount?: string;
+  transferAmount?: number;
+  paymentSubmittedAt?: any;
+
   status?: string;
 
   createdAt?: any;
+  updatedAt?: any;
 };
+
+/* =========================================================
+   STATUS OPTIONS
+========================================================= */
 
 const STATUS_OPTIONS = [
   {
@@ -96,6 +111,10 @@ const STATUS_OPTIONS = [
     icon: "❌",
   },
 ];
+
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function formatMoney(value: any) {
   return Number(value || 0).toLocaleString("en-US");
@@ -164,6 +183,14 @@ function getOrderDate(createdAt: any) {
   }
 }
 
+function getPaymentDate(timestamp: any) {
+  return getOrderDate(timestamp);
+}
+
+/* =========================================================
+   PAGE
+========================================================= */
+
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -172,8 +199,18 @@ export default function AdminOrdersPage() {
     useState<string | null>(null);
 
   const [filter, setFilter] = useState<
-    "all" | "new" | "confirmed" | "preparing" | "shipped" | "delivered" | "cancelled"
+    | "all"
+    | "new"
+    | "confirmed"
+    | "preparing"
+    | "shipped"
+    | "delivered"
+    | "cancelled"
   >("all");
+
+  /* =========================================================
+     LOAD ORDERS
+  ========================================================= */
 
   useEffect(() => {
     const ordersRef = collection(db, "orders");
@@ -209,9 +246,10 @@ export default function AdminOrdersPage() {
     return () => unsubscribe();
   }, []);
 
-  /*
-   * الطلبات المعروضة بعد الفلترة
-   */
+  /* =========================================================
+     FILTER
+  ========================================================= */
+
   const filteredOrders = useMemo(() => {
     if (filter === "all") {
       return orders;
@@ -222,12 +260,10 @@ export default function AdminOrdersPage() {
     );
   }, [orders, filter]);
 
-  /*
-   * تغيير حالة الطلب
-   *
-   * الحالة التي نغيرها هنا هي نفس status
-   * التي تقرأها صفحة التتبع عند العميل.
-   */
+  /* =========================================================
+     CHANGE ORDER STATUS
+  ========================================================= */
+
   async function changeOrderStatus(
     orderId: string,
     status: string
@@ -256,6 +292,161 @@ export default function AdminOrdersPage() {
     }
   }
 
+  /* =========================================================
+     CONFIRM PAYMENT
+  ========================================================= */
+
+  async function confirmPayment(order: Order) {
+    const transferAmount =
+      Number(order.transferAmount || 0);
+
+    if (transferAmount <= 0) {
+      alert(
+        "لا يوجد مبلغ تحويل مسجل لهذا الطلب."
+      );
+
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `هل تريد تأكيد استلام مبلغ ${formatMoney(
+        transferAmount
+      )} جنيه من ${
+        order.payerAccount || "الحساب غير مسجل"
+      }؟`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setUpdatingOrder(order.id);
+
+      const finalTotal = Number(
+        order.finalTotal ??
+          order.total ??
+          0
+      );
+
+      const currentPaid = Number(
+        order.paidAmount ??
+          order.depositAmount ??
+          order.deposit ??
+          0
+      );
+
+      const newPaidAmount =
+        currentPaid + transferAmount;
+
+      const newRemaining = Math.max(
+        finalTotal - newPaidAmount,
+        0
+      );
+
+      await updateDoc(
+        doc(db, "orders", order.id),
+        {
+          paymentStatus: "paid",
+
+          paidAmount:
+            newPaidAmount,
+
+          remaining:
+            newRemaining,
+
+          remainingProducts:
+            newRemaining,
+
+          amountToCollect:
+            newRemaining,
+
+          status:
+            order.status ===
+              "awaiting_payment_review"
+              ? "confirmed"
+              : order.status || "confirmed",
+
+          paymentConfirmedAt:
+            Timestamp.now(),
+
+          updatedAt:
+            Timestamp.now(),
+        }
+      );
+
+      alert(
+        "تم تأكيد الدفع بنجاح ✅"
+      );
+    } catch (error) {
+      console.error(
+        "CONFIRM PAYMENT ERROR:",
+        error
+      );
+
+      alert(
+        "حدث خطأ أثناء تأكيد الدفع."
+      );
+    } finally {
+      setUpdatingOrder(null);
+    }
+  }
+
+  /* =========================================================
+     REJECT PAYMENT
+  ========================================================= */
+
+  async function rejectPayment(order: Order) {
+    const confirmed = window.confirm(
+      `هل تريد رفض التحويل ${
+        order.transferAmount
+          ? `بقيمة ${formatMoney(
+              order.transferAmount
+            )} جنيه`
+          : ""
+      }؟`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setUpdatingOrder(order.id);
+
+      await updateDoc(
+        doc(db, "orders", order.id),
+        {
+          paymentStatus:
+            "rejected",
+
+          status: "new",
+
+          paymentRejectedAt:
+            Timestamp.now(),
+
+          updatedAt:
+            Timestamp.now(),
+        }
+      );
+
+      alert(
+        "تم رفض التحويل ❌"
+      );
+    } catch (error) {
+      console.error(
+        "REJECT PAYMENT ERROR:",
+        error
+      );
+
+      alert(
+        "حدث خطأ أثناء رفض التحويل."
+      );
+    } finally {
+      setUpdatingOrder(null);
+    }
+  }
+
+  /* =========================================================
+     LOADING
+  ========================================================= */
+
   if (loading) {
     return (
       <>
@@ -279,6 +470,10 @@ export default function AdminOrdersPage() {
       </>
     );
   }
+
+  /* =========================================================
+     PAGE
+  ========================================================= */
 
   return (
     <>
@@ -305,13 +500,19 @@ export default function AdminOrdersPage() {
           margin: 0 auto;
         }
 
+        /* =====================================================
+           HEADER
+        ===================================================== */
+
         .page-header {
           background: #fff;
           border: 1px solid #e3e3e3;
           border-radius: 18px;
           padding: 25px;
           margin-bottom: 20px;
-          box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
+          box-shadow:
+            0 4px 18px
+            rgba(0, 0, 0, 0.05);
         }
 
         .page-header h1 {
@@ -364,11 +565,9 @@ export default function AdminOrdersPage() {
           color: #666;
         }
 
-        /*
-         * ==========================
-         * ORDER CARD
-         * ==========================
-         */
+        /* =====================================================
+           ORDER CARD
+        ===================================================== */
 
         .order-card {
           background: #fff;
@@ -376,7 +575,9 @@ export default function AdminOrdersPage() {
           border-radius: 18px;
           margin-bottom: 22px;
           overflow: hidden;
-          box-shadow: 0 5px 20px rgba(0, 0, 0, 0.05);
+          box-shadow:
+            0 5px 20px
+            rgba(0, 0, 0, 0.05);
         }
 
         .order-header {
@@ -434,11 +635,9 @@ export default function AdminOrdersPage() {
           cursor: wait;
         }
 
-        /*
-         * ==========================
-         * CUSTOMER
-         * ==========================
-         */
+        /* =====================================================
+           CUSTOMER
+        ===================================================== */
 
         .customer-section {
           padding: 22px;
@@ -474,11 +673,9 @@ export default function AdminOrdersPage() {
           padding-top: 5px;
         }
 
-        /*
-         * ==========================
-         * PAYMENT
-         * ==========================
-         */
+        /* =====================================================
+           PAYMENT
+        ===================================================== */
 
         .payment-section {
           padding: 22px;
@@ -541,11 +738,161 @@ export default function AdminOrdersPage() {
           color: #c52c2c;
         }
 
-        /*
-         * ==========================
-         * PRODUCTS
-         * ==========================
-         */
+        /* =====================================================
+           TRANSFER REVIEW
+        ===================================================== */
+
+        .transfer-review {
+          margin-top: 18px;
+          border: 1px solid #ead7a2;
+          background: #fffaf0;
+          border-radius: 15px;
+          padding: 18px;
+        }
+
+        .transfer-review.pending {
+          border-color: #ead7a2;
+          background: #fffaf0;
+        }
+
+        .transfer-review.approved {
+          border-color: #b9dfc2;
+          background: #f3fbf5;
+        }
+
+        .transfer-review.rejected {
+          border-color: #f0c2c2;
+          background: #fff6f6;
+        }
+
+        .transfer-review-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-bottom: 15px;
+        }
+
+        .transfer-review-title {
+          font-size: 16px;
+          font-weight: 800;
+          color: #111;
+        }
+
+        .transfer-review-status {
+          display: inline-flex;
+          align-items: center;
+          border-radius: 999px;
+          padding: 6px 11px;
+          font-size: 12px;
+          font-weight: 800;
+          background: #111;
+          color: #fff;
+        }
+
+        .transfer-review.pending
+          .transfer-review-status {
+          background: #9a6b00;
+        }
+
+        .transfer-review.approved
+          .transfer-review-status {
+          background: #16813b;
+        }
+
+        .transfer-review.rejected
+          .transfer-review-status {
+          background: #c52c2c;
+        }
+
+        .transfer-info-grid {
+          display: grid;
+          grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .transfer-info-box {
+          background: #fff;
+          border: 1px solid #e6e6e6;
+          border-radius: 11px;
+          padding: 12px;
+        }
+
+        .transfer-info-box span {
+          display: block;
+          color: #777;
+          font-size: 12px;
+          margin-bottom: 6px;
+        }
+
+        .transfer-info-box strong {
+          display: block;
+          color: #111;
+          font-size: 16px;
+          word-break: break-word;
+        }
+
+        .transfer-amount {
+          color: #16813b !important;
+          font-size: 18px !important;
+        }
+
+        .transfer-actions {
+          display: flex;
+          gap: 10px;
+          margin-top: 15px;
+        }
+
+        .confirm-payment-btn,
+        .reject-payment-btn {
+          border: 0;
+          border-radius: 10px;
+          padding: 11px 16px;
+          font-size: 13px;
+          font-weight: 800;
+          cursor: pointer;
+          transition: 0.2s;
+        }
+
+        .confirm-payment-btn {
+          background: #16813b;
+          color: #fff;
+        }
+
+        .confirm-payment-btn:hover {
+          background: #11652e;
+        }
+
+        .reject-payment-btn {
+          background: #c52c2c;
+          color: #fff;
+        }
+
+        .reject-payment-btn:hover {
+          background: #9f2020;
+        }
+
+        .confirm-payment-btn:disabled,
+        .reject-payment-btn:disabled {
+          opacity: 0.6;
+          cursor: wait;
+        }
+
+        .no-transfer {
+          margin-top: 15px;
+          padding: 12px;
+          background: #f7f7f7;
+          border: 1px dashed #ccc;
+          border-radius: 10px;
+          color: #777;
+          font-size: 13px;
+        }
+
+        /* =====================================================
+           PRODUCTS
+        ===================================================== */
 
         .products-section {
           padding: 22px;
@@ -605,11 +952,9 @@ export default function AdminOrdersPage() {
           white-space: nowrap;
         }
 
-        /*
-         * ==========================
-         * TOTAL
-         * ==========================
-         */
+        /* =====================================================
+           TOTAL
+        ===================================================== */
 
         .total-section {
           padding: 22px;
@@ -661,11 +1006,9 @@ export default function AdminOrdersPage() {
           font-size: 18px;
         }
 
-        /*
-         * ==========================
-         * RESPONSIVE
-         * ==========================
-         */
+        /* =====================================================
+           RESPONSIVE
+        ===================================================== */
 
         @media (max-width: 800px) {
           .money-grid {
@@ -679,6 +1022,10 @@ export default function AdminOrdersPage() {
 
           .address-row {
             grid-column: auto;
+          }
+
+          .transfer-info-grid {
+            grid-template-columns: 1fr;
           }
         }
 
@@ -742,15 +1089,24 @@ export default function AdminOrdersPage() {
           .collection {
             gap: 10px;
           }
+
+          .transfer-actions {
+            flex-direction: column;
+          }
+
+          .confirm-payment-btn,
+          .reject-payment-btn {
+            width: 100%;
+          }
         }
       `}</style>
 
       <main className="orders-page">
         <div className="orders-container">
 
-          {/* =========================
+          {/* =====================================================
               HEADER
-          ========================= */}
+          ===================================================== */}
 
           <section className="page-header">
             <h1>الطلبات</h1>
@@ -810,9 +1166,9 @@ export default function AdminOrdersPage() {
             </div>
           </section>
 
-          {/* =========================
+          {/* =====================================================
               ORDERS
-          ========================= */}
+          ===================================================== */}
 
           {filteredOrders.length === 0 ? (
             <div className="empty">
@@ -879,18 +1235,37 @@ export default function AdminOrdersPage() {
                       remaining
                   );
 
-                const status =
-                  getStatusLabel(
-                    order.status
-                  );
-
-                /*
-                 * لو الطلب قديم ومفيهوش status
-                 * نعتبره مؤكد لو فيه دفع.
-                 */
                 const actualStatus =
                   order.status ||
                   "confirmed";
+
+                const status =
+                  getStatusLabel(
+                    actualStatus
+                  );
+
+                const paymentPending =
+                  order.paymentStatus ===
+                    "pending_review" ||
+                  order.status ===
+                    "awaiting_payment_review";
+
+                const paymentApproved =
+                  order.paymentStatus ===
+                  "paid";
+
+                const paymentRejected =
+                  order.paymentStatus ===
+                  "rejected";
+
+                const hasTransferData =
+                  Boolean(
+                    order.payerAccount ||
+                      Number(
+                        order.transferAmount ||
+                          0
+                      ) > 0
+                  );
 
                 return (
                   <article
@@ -898,9 +1273,9 @@ export default function AdminOrdersPage() {
                     className="order-card"
                   >
 
-                    {/* =====================
+                    {/* =================================================
                         ORDER HEADER
-                    ===================== */}
+                    ================================================= */}
 
                     <div className="order-header">
 
@@ -966,9 +1341,9 @@ export default function AdminOrdersPage() {
 
                     </div>
 
-                    {/* =====================
+                    {/* =================================================
                         CUSTOMER
-                    ===================== */}
+                    ================================================= */}
 
                     <section className="customer-section">
 
@@ -1023,9 +1398,9 @@ export default function AdminOrdersPage() {
 
                     </section>
 
-                    {/* =====================
+                    {/* =================================================
                         PAYMENT
-                    ===================== */}
+                    ================================================= */}
 
                     <section className="payment-section">
 
@@ -1034,12 +1409,9 @@ export default function AdminOrdersPage() {
                       </h2>
 
                       <div className="payment-type">
-                        {order.paymentType ===
-                          "deposit" ||
-                        order.paymentStatus ===
-                          "deposit"
-                          ? "💰 دفع عربون 30%"
-                          : "💳 دفع المبلغ بالكامل"}
+                        {getPaymentLabel(
+                          order
+                        )}
                       </div>
 
                       <div className="money-grid">
@@ -1098,11 +1470,176 @@ export default function AdminOrdersPage() {
 
                       </div>
 
+                      {/* =================================================
+                          TRANSFER REVIEW
+                      ================================================= */}
+
+                      {hasTransferData ? (
+
+                        <div
+                          className={`transfer-review ${
+                            paymentPending
+                              ? "pending"
+                              : paymentApproved
+                              ? "approved"
+                              : paymentRejected
+                              ? "rejected"
+                              : ""
+                          }`}
+                        >
+
+                          <div className="transfer-review-header">
+
+                            <div className="transfer-review-title">
+                              💸 بيانات التحويل
+                            </div>
+
+                            <div className="transfer-review-status">
+
+                              {paymentPending
+                                ? "في انتظار المراجعة"
+                                : paymentApproved
+                                ? "تم تأكيد الدفع"
+                                : paymentRejected
+                                ? "تم رفض التحويل"
+                                : "بيانات تحويل"}
+
+                            </div>
+
+                          </div>
+
+                          <div className="transfer-info-grid">
+
+                            <div className="transfer-info-box">
+
+                              <span>
+                                الرقم / الحساب الذي حوّل منه العميل
+                              </span>
+
+                              <strong dir="ltr">
+                                {order.payerAccount ||
+                                  "-"}
+                              </strong>
+
+                            </div>
+
+                            <div className="transfer-info-box">
+
+                              <span>
+                                مبلغ التحويل
+                              </span>
+
+                              <strong className="transfer-amount">
+                                {formatMoney(
+                                  order.transferAmount
+                                )}{" "}
+                                جنيه
+                              </strong>
+
+                            </div>
+
+                            <div className="transfer-info-box">
+
+                              <span>
+                                وقت إرسال بيانات التحويل
+                              </span>
+
+                              <strong>
+                                {getPaymentDate(
+                                  order.paymentSubmittedAt
+                                ) ||
+                                  "غير متوفر"}
+                              </strong>
+
+                            </div>
+
+                            <div className="transfer-info-box">
+
+                              <span>
+                                حالة الدفع
+                              </span>
+
+                              <strong>
+                                {paymentPending
+                                  ? "بانتظار التأكيد"
+                                  : paymentApproved
+                                  ? "الدفع مؤكد ✅"
+                                  : paymentRejected
+                                  ? "التحويل مرفوض ❌"
+                                  : order.paymentStatus ||
+                                    "غير محدد"}
+                              </strong>
+
+                            </div>
+
+                          </div>
+
+                          {/* =================================================
+                              APPROVE / REJECT
+                          ================================================= */}
+
+                          {paymentPending && (
+
+                            <div className="transfer-actions">
+
+                              <button
+                                type="button"
+                                className="confirm-payment-btn"
+                                disabled={
+                                  updatingOrder ===
+                                  order.id
+                                }
+                                onClick={() =>
+                                  confirmPayment(
+                                    order
+                                  )
+                                }
+                              >
+                                {updatingOrder ===
+                                order.id
+                                  ? "جاري التنفيذ..."
+                                  : "✅ تأكيد استلام الدفع"}
+                              </button>
+
+                              <button
+                                type="button"
+                                className="reject-payment-btn"
+                                disabled={
+                                  updatingOrder ===
+                                  order.id
+                                }
+                                onClick={() =>
+                                  rejectPayment(
+                                    order
+                                  )
+                                }
+                              >
+                                {updatingOrder ===
+                                order.id
+                                  ? "جاري التنفيذ..."
+                                  : "❌ رفض التحويل"}
+                              </button>
+
+                            </div>
+
+                          )}
+
+                        </div>
+
+                      ) : (
+
+                        <div className="no-transfer">
+                          لم يرسل العميل بيانات التحويل
+                          حتى الآن.
+                        </div>
+
+                      )}
+
                     </section>
 
-                    {/* =====================
+                    {/* =================================================
                         PRODUCTS
-                    ===================== */}
+                    ================================================= */}
 
                     <section className="products-section">
 
@@ -1131,7 +1668,7 @@ export default function AdminOrdersPage() {
                                 alt={
                                   product.name ||
                                   "Product"
-                              }
+                                }
                               />
 
                               <div className="product-info">
@@ -1209,9 +1746,9 @@ export default function AdminOrdersPage() {
 
                     </section>
 
-                    {/* =====================
+                    {/* =================================================
                         TOTALS
-                    ===================== */}
+                    ================================================= */}
 
                     <section className="total-section">
 
@@ -1232,6 +1769,7 @@ export default function AdminOrdersPage() {
                         order.couponDiscount || 0
                       ) > 0 && (
                         <div className="total-line discount">
+
                           <span>
                             الخصم
                           </span>
@@ -1243,10 +1781,12 @@ export default function AdminOrdersPage() {
                             )}{" "}
                             جنيه
                           </strong>
+
                         </div>
                       )}
 
                       <div className="total-line">
+
                         <span>
                           الشحن
                         </span>
@@ -1257,9 +1797,11 @@ export default function AdminOrdersPage() {
                           )}{" "}
                           جنيه
                         </strong>
+
                       </div>
 
                       <div className="total-line final">
+
                         <span>
                           الإجمالي النهائي
                         </span>
@@ -1270,9 +1812,11 @@ export default function AdminOrdersPage() {
                           )}{" "}
                           جنيه
                         </strong>
+
                       </div>
 
                       <div className="collection">
+
                         <span>
                           المطلوب تحصيله عند
                           الاستلام
@@ -1284,6 +1828,7 @@ export default function AdminOrdersPage() {
                           )}{" "}
                           جنيه
                         </strong>
+
                       </div>
 
                     </section>
