@@ -18,39 +18,48 @@ export default function AdminLogin() {
   const [error, setError] = useState("");
 
   async function handleLogin() {
-    setError("");
+  if (loading) return;
 
-    if (!email.trim()) {
-      setError("اكتب البريد الإلكتروني.");
-      return;
-    }
+  setError("");
 
-    if (!password) {
-      setError("اكتب كلمة المرور.");
-      return;
-    }
+  const cleanEmail = email.trim();
 
-    try {
-      setLoading(true);
-
-      await signInWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
-      );
-
-      router.replace("/admin/dashboard");
-    } catch (error: any) {
-      console.error("ADMIN LOGIN ERROR:", error);
-
-      setError(
-        "البريد الإلكتروني أو كلمة المرور غير صحيحة."
-      );
-    } finally {
-      setLoading(false);
-    }
+  if (!cleanEmail || !password) {
+    setError("اكتب البريد الإلكتروني وكلمة المرور.");
+    return;
   }
 
+  setLoading(true);
+  console.log("ADMIN LOGIN: بدأ تسجيل الدخول");
+
+  try {
+    const result = await signInWithEmailAndPassword(
+      auth,
+      cleanEmail,
+      password
+    );
+
+    console.log(
+      "ADMIN LOGIN SUCCESS:",
+      result.user.email,
+      result.user.uid
+    );
+
+    console.log("LOGIN SUCCESS", result.user.email);
+alert("تم تسجيل الدخول بنجاح");
+router.replace("/admin/dashboard");
+  } catch (err: any) {
+    console.error(
+      "ADMIN LOGIN ERROR:",
+      err.code,
+      err.message
+    );
+
+    setError(`فشل تسجيل الدخول: ${err.code ?? "UNKNOWN"}`);
+  } finally {
+    setLoading(false);
+  }
+}
   return (
     <main className="login-page" dir="rtl">
       <div className="login-box">
