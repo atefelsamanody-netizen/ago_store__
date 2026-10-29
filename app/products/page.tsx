@@ -370,7 +370,7 @@ export default function ProductsPage() {
           return (
             <Link
               key={product.id}
-              href={`/products/${product.slug || product.id}`}
+             href={`/products/${encodeURIComponent(product.slug?.trim() && product.slug.trim() !== "مش مهم" ? product.slug.trim() : product.id)}`}
               className="product-card"
             >
               {/* IMAGE */}
