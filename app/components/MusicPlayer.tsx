@@ -109,32 +109,7 @@ export default function MusicPlayer() {
 
   return (
     <>
-      <audio
-        ref={audioRef}
-        src="/music/ago_music.mp3"
-        loop
-        preload="auto"
-      />
-
-      <button
-        type="button"
-        onClick={toggleMusic}
-        className="ago-music-button"
-        aria-label={isPlaying ? "إيقاف الموسيقى" : "تشغيل الموسيقى"}
-        title={isPlaying ? "إيقاف الموسيقى" : "تشغيل الموسيقى"}
-      >
-        <span className={isPlaying ? "music-icon playing" : "music-icon"}>
-          {isPlaying ? "♫" : "♪"}
-        </span>
-
-        <span>{isPlaying ? "MUSIC ON" : "MUSIC OFF"}</span>
-      </button>
-
-      {showHint && !isPlaying && (
-        <div className="ago-music-hint">
-          🎵 اضغط في أي مكان لتشغيل موسيقى A.GO
-        </div>
-      )}
+    
 
       <style jsx>{`
         .ago-music-button {

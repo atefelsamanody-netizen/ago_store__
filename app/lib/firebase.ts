@@ -11,10 +11,14 @@ const firebaseConfig = {
   appId: "1:581871100676:web:8032bc3948eab2089d6651",
 };
 
-const app =
-  getApps().length > 0
-    ? getApps()[0]
-    : initializeApp(firebaseConfig);
-
+const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  orderBy,
+  query,
+} from "firebase/firestore";
