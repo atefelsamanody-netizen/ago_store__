@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-
 import {
   collection,
+  doc,
+  getDoc,
   getDocs,
   query,
   where,
@@ -44,94 +45,47 @@ export default function ProductPage() {
       ? params.slug[0]
       : "";
 
-  const [product, setProduct] =
-    useState<Product | null>(null);
+  const [product, setProduct] = useState<Product | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [selectedImage, setSelectedImage] = useState("");
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [selectedColorImages, setSelectedColorImages] = useState<string[]>([]);
+  const [selectedColor, setSelectedColor] = useState<Color | null>(null);
+  const [selectedSize, setSelectedSize] = useState("");
+  const [selectedMessage, setSelectedMessage] = useState(0);
+  const [includeHiddenMessage, setIncludeHiddenMessage] = useState(false);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [cartCount, setCartCount] = useState(0);
 
-  const [loading, setLoading] =
-    useState(true);
-
-  const [error, setError] =
-    useState("");
-
-  const [selectedImage, setSelectedImage] =
-    useState("");
-
-  const [selectedImageIndex, setSelectedImageIndex] =
-    useState(0);
-
-  const [selectedColorImages, setSelectedColorImages] =
-    useState<string[]>([]);
-
-  const [selectedColor, setSelectedColor] =
-    useState<Color | null>(null);
-
-  const [selectedSize, setSelectedSize] =
-    useState("");
-
-  const [selectedMessage, setSelectedMessage] =
-    useState(0);
-
-  const [includeHiddenMessage, setIncludeHiddenMessage] =
-    useState(false);
-
-  const [touchStartX, setTouchStartX] =
-    useState<number | null>(null);
-
-    const [cartCount, setCartCount] = useState(0);
-
-useEffect(() => {
-  function updateCartCount() {
-    try {
-      const cart = JSON.parse(
-        localStorage.getItem("cart") || "[]"
-      );
-
-      const count = cart.reduce(
-        (total: number, item: any) =>
-          total + (item.qty || 1),
-        0
-      );
-
-      setCartCount(count);
-    } catch {
-      setCartCount(0);
-    }
-  }
-
-  updateCartCount();
-
-  window.addEventListener("storage", updateCartCount);
-  window.addEventListener("cartUpdated", updateCartCount);
-
-  return () => {
-    window.removeEventListener(
-      "storage",
-      updateCartCount
-    );
-
-    window.removeEventListener(
-      "cartUpdated",
-      updateCartCount
-    );
-  };
-}, []);
-  /* =========================================================
-     IMAGE VALIDATION
-     ========================================================= */
-
-  function isValidImageUrl(
-    value: unknown
-  ): value is string {
-    if (typeof value !== "string") {
-      return false;
+  useEffect(() => {
+    function updateCartCount() {
+      try {
+        const cart = JSON.parse(localStorage.getItem("cart") || "[]");
+        setCartCount(
+          cart.reduce(
+            (total: number, item: any) => total + (item.qty || 1),
+            0
+          )
+        );
+      } catch {
+        setCartCount(0);
+      }
     }
 
+    updateCartCount();
+    window.addEventListener("storage", updateCartCount);
+    window.addEventListener("cartUpdated", updateCartCount);
+
+    return () => {
+      window.removeEventListener("storage", updateCartCount);
+      window.removeEventListener("cartUpdated", updateCartCount);
+    };
+  }, []);
+
+  function isValidImageUrl(value: unknown): value is string {
+    if (typeof value !== "string") return false;
     const url = value.trim();
-
-    if (!url) {
-      return false;
-    }
-
     return (
       url.startsWith("http://") ||
       url.startsWith("https://") ||
@@ -139,803 +93,355 @@ useEffect(() => {
     );
   }
 
-  function cleanImages(
-    value: unknown
-  ): string[] {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-
+  function cleanImages(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
     return value.filter(
-      (item): item is string =>
-        isValidImageUrl(item)
+      (item): item is string => isValidImageUrl(item)
     );
   }
 
-  /* =========================================================
-     LOAD PRODUCT
-     ========================================================= */
-
   useEffect(() => {
     if (!slug) {
+      setProduct(null);
+      setError("Product URL is missing.");
       setLoading(false);
-      setError("Product slug is missing.");
       return;
     }
 
-    loadProduct();
+    void loadProduct(slug);
   }, [slug]);
 
-  async function loadProduct() {
+  async function loadProduct(routeValue: string) {
+    setLoading(true);
+    setError("");
+    setProduct(null);
+
     try {
-      setLoading(true);
-      setError("");
-      setProduct(null);
+      let productData: Product | null = null;
 
-      const productsRef =
-        collection(db, "products");
-
-      const q = query(
+      // 1. Search by slug.
+      const productsRef = collection(db, "products");
+      const slugQuery = query(
         productsRef,
-        where("slug", "==", slug)
+        where("slug", "==", routeValue)
       );
+      const slugSnapshot = await getDocs(slugQuery);
 
-      const snapshot =
-        await getDocs(q);
+      if (!slugSnapshot.empty) {
+        const productDoc = slugSnapshot.docs[0];
+        productData = {
+          ...productDoc.data(),
+          id: productDoc.id,
+        } as Product;
+      }
 
-      if (snapshot.empty) {
-        setError(
-          `Product "${slug}" was not found.`
+      // 2. If slug search fails, try the Firebase document ID.
+      if (!productData) {
+        const productDoc = await getDoc(
+          doc(db, "products", routeValue)
         );
 
+        if (productDoc.exists()) {
+          productData = {
+            ...productDoc.data(),
+            id: productDoc.id,
+          } as Product;
+        }
+      }
+
+      if (!productData) {
+        setError(`Product "${routeValue}" was not found.`);
         return;
       }
 
-      const productDoc =
-        snapshot.docs[0];
+      setProduct(productData);
 
-      const data: Product = {
-        id: productDoc.id,
-        ...(productDoc.data() as Omit<
-          Product,
-          "id"
-        >),
-      };
-
-      setProduct(data);
-
-      const generalImages =
-        cleanImages(data.images);
-
-      const colors =
-        Array.isArray(data.colors)
-          ? data.colors
-          : [];
-
-      /* FIRST COLOR */
+      const generalImages = cleanImages(productData.images);
+      const colors = Array.isArray(productData.colors)
+        ? productData.colors
+        : [];
 
       if (colors.length > 0) {
-        const firstColor =
-          colors[0];
-
+        const firstColor = colors[0];
         setSelectedColor(firstColor);
 
-        let colorImages: string[] = [];
+        const colorImages =
+          typeof firstColor === "object" && firstColor !== null
+            ? cleanImages(firstColor.images)
+            : [];
 
-        if (
-          typeof firstColor === "object" &&
-          firstColor !== null
-        ) {
-          colorImages =
-            cleanImages(
-              firstColor.images
-            );
-        }
+        const initialImages =
+          colorImages.length > 0 ? colorImages : generalImages;
 
-        if (colorImages.length > 0) {
-          setSelectedColorImages(
-            colorImages
-          );
-
-          setSelectedImageIndex(0);
-
-          setSelectedImage(
-            colorImages[0]
-          );
-        } else if (
-          generalImages.length > 0
-        ) {
-          setSelectedColorImages(
-            generalImages
-          );
-
-          setSelectedImageIndex(0);
-
-          setSelectedImage(
-            generalImages[0]
-          );
-        } else {
-          setSelectedColorImages([]);
-          setSelectedImage("");
-        }
-      }
-
-      /* NO COLORS */
-
-      else if (
-        generalImages.length > 0
-      ) {
-        setSelectedColorImages(
-          generalImages
-        );
-
+        setSelectedColorImages(initialImages);
         setSelectedImageIndex(0);
-
-        setSelectedImage(
-          generalImages[0]
-        );
+        setSelectedImage(initialImages[0] || "");
       } else {
-        setSelectedColorImages([]);
-        setSelectedImage("");
+        setSelectedColor(null);
+        setSelectedColorImages(generalImages);
+        setSelectedImageIndex(0);
+        setSelectedImage(generalImages[0] || "");
       }
 
-      /* FIRST SIZE */
+      const sizes = Array.isArray(productData.sizes)
+        ? productData.sizes
+        : [];
 
-      const sizes =
-        Array.isArray(data.sizes)
-          ? data.sizes
-          : [];
-
-      setSelectedSize(
-        sizes.length > 0
-          ? sizes[0]
-          : ""
-      );
-
+      setSelectedSize(sizes[0] || "");
       setSelectedMessage(0);
-
       setIncludeHiddenMessage(false);
     } catch (err) {
-      console.error(
-        "LOAD PRODUCT ERROR:",
-        err
-      );
-
+      console.error("LOAD PRODUCT ERROR:", err);
       setProduct(null);
-
-      setError(
-        "Could not load this product."
-      );
+      setError("Could not load this product. Check Firebase permissions and connection.");
     } finally {
       setLoading(false);
     }
   }
 
-  /* =========================================================
-     CHANGE COLOR
-     ========================================================= */
-
-  function handleColorChange(
-    color: Color
-  ) {
+  function handleColorChange(color: Color) {
     setSelectedColor(color);
 
-    const generalImages =
-      cleanImages(
-        product?.images
-      );
+    const generalImages = cleanImages(product?.images);
+    const colorImages =
+      typeof color === "object" && color !== null
+        ? cleanImages(color.images)
+        : [];
 
-    let colorImages: string[] = [];
+    const nextImages =
+      colorImages.length > 0 ? colorImages : generalImages;
 
-    if (
-      typeof color === "object" &&
-      color !== null
-    ) {
-      colorImages =
-        cleanImages(
-          color.images
-        );
-    }
-
-    if (colorImages.length > 0) {
-      setSelectedColorImages(
-        colorImages
-      );
-
-      setSelectedImageIndex(0);
-
-      setSelectedImage(
-        colorImages[0]
-      );
-
-      return;
-    }
-
-    if (generalImages.length > 0) {
-      setSelectedColorImages(
-        generalImages
-      );
-
-      setSelectedImageIndex(0);
-
-      setSelectedImage(
-        generalImages[0]
-      );
-    } else {
-      setSelectedColorImages([]);
-      setSelectedImage("");
-    }
+    setSelectedColorImages(nextImages);
+    setSelectedImageIndex(0);
+    setSelectedImage(nextImages[0] || "");
   }
 
-  /* =========================================================
-     IMAGE NAVIGATION
-     ========================================================= */
-
   function showNextImage() {
-    if (
-      selectedColorImages.length <= 1
-    ) {
-      return;
-    }
+    if (selectedColorImages.length <= 1) return;
 
     const nextIndex =
-      (selectedImageIndex + 1) %
-      selectedColorImages.length;
+      (selectedImageIndex + 1) % selectedColorImages.length;
 
-    setSelectedImageIndex(
-      nextIndex
-    );
-
-    setSelectedImage(
-      selectedColorImages[nextIndex]
-    );
+    setSelectedImageIndex(nextIndex);
+    setSelectedImage(selectedColorImages[nextIndex]);
   }
 
   function showPreviousImage() {
-    if (
-      selectedColorImages.length <= 1
-    ) {
-      return;
-    }
+    if (selectedColorImages.length <= 1) return;
 
     const previousIndex =
       selectedImageIndex === 0
         ? selectedColorImages.length - 1
         : selectedImageIndex - 1;
 
-    setSelectedImageIndex(
-      previousIndex
-    );
-
-    setSelectedImage(
-      selectedColorImages[
-        previousIndex
-      ]
-    );
+    setSelectedImageIndex(previousIndex);
+    setSelectedImage(selectedColorImages[previousIndex]);
   }
 
-  /* =========================================================
-     SWIPE
-     ========================================================= */
-
-  function handleTouchStart(
-    e: React.TouchEvent<HTMLDivElement>
-  ) {
-    setTouchStartX(
-      e.touches[0].clientX
-    );
+  function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    setTouchStartX(e.touches[0].clientX);
   }
 
-  function handleTouchEnd(
-    e: React.TouchEvent<HTMLDivElement>
-  ) {
-    if (
-      touchStartX === null
-    ) {
-      return;
-    }
+  function handleTouchEnd(e: React.TouchEvent<HTMLDivElement>) {
+    if (touchStartX === null) return;
 
-    const endX =
-      e.changedTouches[0].clientX;
+    const difference = touchStartX - e.changedTouches[0].clientX;
 
-    const difference =
-      touchStartX - endX;
-
-    if (
-      Math.abs(difference) > 50
-    ) {
-      if (difference > 0) {
-        showNextImage();
-      } else {
-        showPreviousImage();
-      }
+    if (Math.abs(difference) > 50) {
+      difference > 0 ? showNextImage() : showPreviousImage();
     }
 
     setTouchStartX(null);
   }
 
-  /* =========================================================
-     LOADING
-     ========================================================= */
+  function getColorName(color: Color, index: number) {
+    if (typeof color === "string") return color;
+    return color.name || `Color ${index + 1}`;
+  }
+
+  function getColorCode(color: Color) {
+    if (typeof color === "string") {
+      const normalized = color.trim();
+      return /^#[0-9a-fA-F]{6}$/.test(normalized)
+        ? normalized
+        : "#000000";
+    }
+
+    return color.code || "#000000";
+  }
+
+  function isColorActive(color: Color) {
+    if (typeof color === "string") {
+      return selectedColor === color;
+    }
+
+    return (
+      typeof selectedColor === "object" &&
+      selectedColor !== null &&
+      selectedColor.name === color.name
+    );
+  }
 
   if (loading) {
     return (
       <main className="product-page-shell">
-
         <header className="ago-page-nav product-page-nav">
-
-          <a
-            href="/track"
-            className="ago-nav-track"
-          >
-            <span className="nav-track-icon">
-              ◷
-            </span>
-
-            <span>
-              Track Order
-            </span>
+          <a href="/track" className="ago-nav-track">◷ Track Order</a>
+          <a href="/" className="ago-nav-logo">
+            <span className="ago-nav-a">A</span>
+            <span className="ago-nav-go">GO</span>
           </a>
-
-          <a
-            href="/"
-            className="ago-nav-logo"
-          >
-            <span className="ago-nav-a">
-              A
-            </span>
-
-            <span className="ago-nav-go">
-              GO
-            </span>
+          <a href="/cart" className="ago-nav-cart">
+            🛒 Cart {cartCount > 0 ? `(${cartCount})` : ""}
           </a>
-
-        <a
-  href="/cart"
-  className="ago-nav-cart"
-  aria-label="Shopping Cart"
->
-  <span style={{ position: "relative" }}>
-    <span className="nav-cart-icon">
-      🛒
-    </span>
-
-    {cartCount > 0 && (
-      <span
-        style={{
-          position: "absolute",
-          top: "-7px",
-          right: "-9px",
-          background: "#111",
-          color: "#fff",
-          borderRadius: "50%",
-          minWidth: "16px",
-          height: "16px",
-          padding: "0 3px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "9px",
-          fontWeight: 600,
-          lineHeight: 1,
-        }}
-      >
-        {cartCount}
-      </span>
-    )}
-  </span>
-
-  <span>
-    Cart
-  </span>
-</a>
-
         </header>
-
-        <div className="product-loading">
-          <h2>
-            Loading...
-          </h2>
-        </div>
-
+        <div className="product-loading"><h2>Loading...</h2></div>
       </main>
     );
   }
-
-  /* =========================================================
-     ERROR
-     ========================================================= */
 
   if (!product) {
     return (
       <main className="product-page-shell">
-
         <header className="ago-page-nav product-page-nav">
-
-          <a
-            href="/track"
-            className="ago-nav-track"
-          >
-            <span className="nav-track-icon">
-              ◷
-            </span>
-
-            <span>
-              Track Order
-            </span>
+          <a href="/track" className="ago-nav-track">◷ Track Order</a>
+          <a href="/" className="ago-nav-logo">
+            <span className="ago-nav-a">A</span>
+            <span className="ago-nav-go">GO</span>
           </a>
-
-          <a
-            href="/"
-            className="ago-nav-logo"
-          >
-            <span className="ago-nav-a">
-              A
-            </span>
-
-            <span className="ago-nav-go">
-              GO
-            </span>
-          </a>
-
-          <a
-            href="/cart"
-            className="ago-nav-cart"
-          >
-            <span className="nav-cart-icon">
-              🛒
-            </span>
-
-            <span>
-              Cart
-            </span>
-          </a>
-
+          <a href="/cart" className="ago-nav-cart">🛒 Cart</a>
         </header>
-
         <div className="product-error">
-          <h2>
-            Product Not Found
-          </h2>
-
-          <p>
-            {error ||
-              `Slug: ${slug}`}
-          </p>
+          <h2>Product Not Found</h2>
+          <p>{error || `Product URL: ${slug}`}</p>
+          <a href="/products">Back to products</a>
         </div>
-
       </main>
     );
   }
 
-  const currentProduct =
-    product;
-
-  const images =
-    cleanImages(
-      currentProduct.images
-    );
-
-  const colors =
-    Array.isArray(
-      currentProduct.colors
-    )
-      ? currentProduct.colors
-      : [];
-
-  const sizes =
-    Array.isArray(
-      currentProduct.sizes
-    )
-      ? currentProduct.sizes
-      : [];
-
-  const hiddenMessages =
-    cleanImages(
-      currentProduct.hiddenMessages
-    );
+  const currentProduct = product;
+  const images = cleanImages(currentProduct.images);
+  const colors = Array.isArray(currentProduct.colors)
+    ? currentProduct.colors
+    : [];
+  const sizes = Array.isArray(currentProduct.sizes)
+    ? currentProduct.sizes
+    : [];
+  const hiddenMessages = Array.isArray(currentProduct.hiddenMessages)
+    ? currentProduct.hiddenMessages.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
 
   const currentHiddenMessage =
     hiddenMessages.length > 0
-      ? hiddenMessages[
-          selectedMessage
-        ]
+      ? hiddenMessages[selectedMessage]
       : null;
 
-  const basePrice =
-    Number(
-      currentProduct.price || 0
-    );
-
-  const hiddenMessagePrice =
-    Number(
-      currentProduct.hiddenMessagePrice ||
-        50
-    );
-
+  const basePrice = Number(currentProduct.price || 0);
+  const hiddenMessagePrice = Number(
+    currentProduct.hiddenMessagePrice || 50
+  );
   const finalPrice =
-    basePrice +
-    (includeHiddenMessage
-      ? hiddenMessagePrice
-      : 0);
-
-  function getColorName(
-    color: Color,
-    index: number
-  ) {
-    if (
-      typeof color === "string"
-    ) {
-      return color;
-    }
-
-    return (
-      color?.name ||
-      `Color ${index + 1}`
-    );
-  }
-
-  function getColorCode(
-    color: Color
-  ) {
-    if (
-      typeof color === "string"
-    ) {
-      return color;
-    }
-
-    return (
-      color?.code ||
-      "#000000"
-    );
-  }
-
-  function isColorActive(
-    color: Color
-  ) {
-    if (
-      typeof color === "string"
-    ) {
-      return (
-        selectedColor === color
-      );
-    }
-
-    if (
-      typeof selectedColor !==
-        "object" ||
-      selectedColor === null
-    ) {
-      return false;
-    }
-
-    return (
-      selectedColor.name ===
-      color.name
-    );
-  }
-
-  /* =========================================================
-     ADD TO CART
-     ========================================================= */
+    basePrice + (includeHiddenMessage ? hiddenMessagePrice : 0);
 
   function addToCart() {
     try {
-      const cart = JSON.parse(
-        localStorage.getItem(
-          "cart"
-        ) || "[]"
-      );
-
-      const hiddenMessage =
-        includeHiddenMessage
-          ? currentHiddenMessage
-          : null;
+      const cart = JSON.parse(localStorage.getItem("cart") || "[]");
+      const hiddenMessage = includeHiddenMessage
+        ? currentHiddenMessage
+        : null;
 
       const colorKey =
-        typeof selectedColor ===
-        "string"
+        typeof selectedColor === "string"
           ? selectedColor
-          : selectedColor?.name ||
-            "";
+          : selectedColor?.name || "";
 
-      const existingIndex =
-        cart.findIndex(
-          (item: any) =>
-            item.slug === slug &&
-            item.size ===
-              selectedSize &&
-            (
-              typeof item.color ===
-              "string"
-                ? item.color
-                : item.color?.name
-            ) === colorKey &&
-            item.hiddenMessage ===
-              hiddenMessage
-        );
+      const existingIndex = cart.findIndex(
+        (item: any) =>
+          (item.id === currentProduct.id || item.slug === slug) &&
+          item.size === selectedSize &&
+          (
+            typeof item.color === "string"
+              ? item.color
+              : item.color?.name
+          ) === colorKey &&
+          item.hiddenMessage === hiddenMessage
+      );
 
-      if (
-        existingIndex !== -1
-      ) {
-        cart[
-          existingIndex
-        ].qty =
-          (cart[
-            existingIndex
-          ].qty || 1) + 1;
+      if (existingIndex !== -1) {
+        cart[existingIndex].qty =
+          (cart[existingIndex].qty || 1) + 1;
       } else {
         cart.push({
-          id:
-            currentProduct.id,
-
-          slug,
-
-          name:
-            currentProduct.name ||
-            "Product",
-
-          image:
-            selectedImage ||
-            images[0] ||
-            "/product-01.png",
-
-          color:
-            selectedColor,
-
-          size:
-            selectedSize,
-
+          id: currentProduct.id,
+          slug: currentProduct.slug || slug,
+          name: currentProduct.name || "Product",
+          image: selectedImage || images[0] || "/product-01.png",
+          color: selectedColor,
+          size: selectedSize,
           qty: 1,
-
           hiddenMessage,
-
-          price:
-            finalPrice,
+          price: finalPrice,
         });
       }
 
-      localStorage.setItem(
-        "cart",
-        JSON.stringify(cart)
-      );
+      localStorage.setItem("cart", JSON.stringify(cart));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new Event("cartUpdated"));
 
-      window.dispatchEvent(
-  new Event("storage")
-);
-window.dispatchEvent(
-  new Event("cartUpdated")
-);
-window.dispatchEvent(
-  new Event("cartUpdated")
-);
-      alert(
-        "✅ Product Added To Cart"
-      );
+      alert("✅ Product Added To Cart");
     } catch (err) {
-      console.error(
-        "ADD TO CART ERROR:",
-        err
-      );
-
-      alert(
-        "Could not add product to cart."
-      );
+      console.error("ADD TO CART ERROR:", err);
+      alert("Could not add product to cart.");
     }
   }
 
-  /* =========================================================
-     RENDER
-     ========================================================= */
-
   return (
     <main className="product-page-shell">
-
-      {/* =====================================================
-          TOP NAVIGATION
-          TRACK LEFT / AGO CENTER / CART RIGHT
-          ===================================================== */}
-
       <header className="ago-page-nav product-page-nav">
-
-        <a
-          href="/track"
-          className="ago-nav-track"
-          aria-label="Track Order"
-        >
-          <span className="nav-track-icon">
-            ◷
-          </span>
-
-          <span>
-            Track Order
-          </span>
+        <a href="/track" className="ago-nav-track" aria-label="Track Order">
+          <span className="nav-track-icon">◷</span>
+          <span>Track Order</span>
         </a>
 
-        <a
-          href="/"
-          className="ago-nav-logo"
-          aria-label="AGO Home"
-        >
-          <span className="ago-nav-a">
-            A
-          </span>
-
-          <span className="ago-nav-go">
-            GO
-          </span>
+        <a href="/" className="ago-nav-logo" aria-label="AGO Home">
+          <span className="ago-nav-a">A</span>
+          <span className="ago-nav-go">GO</span>
         </a>
 
-        <a
-          href="/cart"
-          className="ago-nav-cart"
-          aria-label="Shopping Cart"
-        >
-          <span className="nav-cart-icon">
-            🛒
-          </span>
-
-          <span>
-            Cart
-          </span>
+        <a href="/cart" className="ago-nav-cart" aria-label="Shopping Cart">
+          <span className="nav-cart-icon">🛒</span>
+          <span>Cart {cartCount > 0 ? `(${cartCount})` : ""}</span>
         </a>
-
       </header>
 
-      {/* =====================================================
-          PRODUCT CONTENT
-          ===================================================== */}
-
       <section className="product-content">
-
-        {/* ===================================================
-            GALLERY
-            IMPORTANT:
-            استخدام img عادي بدل next/image
-            =================================================== */}
-
         <div
           className="product-gallery"
-          onTouchStart={
-            handleTouchStart
-          }
-          onTouchEnd={
-            handleTouchEnd
-          }
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
         >
-
-          {isValidImageUrl(
-            selectedImage
-          ) ? (
+          {isValidImageUrl(selectedImage) ? (
             <img
               src={selectedImage}
-              alt={
-                currentProduct.name ||
-                "Product"
-              }
+              alt={currentProduct.name || "Product"}
               className="main-product-image"
               draggable={false}
             />
           ) : images.length > 0 ? (
             <img
               src={images[0]}
-              alt={
-                currentProduct.name ||
-                "Product"
-              }
+              alt={currentProduct.name || "Product"}
               className="main-product-image"
               draggable={false}
             />
           ) : (
-            <div className="product-image-fallback">
-              <span>
-                AGO
-              </span>
-            </div>
+            <div className="product-image-fallback"><span>AGO</span></div>
           )}
 
-          {selectedColorImages.length >
-            1 && (
+          {selectedColorImages.length > 1 && (
             <>
               <button
                 type="button"
@@ -948,7 +454,6 @@ window.dispatchEvent(
               >
                 ←
               </button>
-
               <button
                 type="button"
                 className="gallery-arrow gallery-arrow-right"
@@ -960,169 +465,74 @@ window.dispatchEvent(
               >
                 →
               </button>
-
               <div className="image-counter">
-                {selectedImageIndex +
-                  1}{" "}
-                /{" "}
-                {
-                  selectedColorImages.length
-                }
+                {selectedImageIndex + 1} / {selectedColorImages.length}
               </div>
             </>
           )}
-
         </div>
 
-        {/* ===================================================
-            PRODUCT INFO
-            =================================================== */}
-
         <div className="product-info">
-
-          <h1>
-            {currentProduct.name ||
-              "Product"}
-          </h1>
+          <h1>{currentProduct.name || "Product"}</h1>
 
           <div className="price">
-
-            <span className="new-price">
-              {finalPrice} EGP
-            </span>
-
-            {Number(
-              currentProduct.oldPrice || 0
-            ) > 0 && (
+            <span className="new-price">{finalPrice} EGP</span>
+            {Number(currentProduct.oldPrice || 0) > 0 && (
               <span className="old-price">
-                {
-                  currentProduct.oldPrice
-                }{" "}
-                EGP
+                {currentProduct.oldPrice} EGP
               </span>
             )}
-
           </div>
-
-          {/* SIZE */}
 
           {sizes.length > 0 && (
             <>
-              <h3>
-                Size
-              </h3>
-
+              <h3>Size</h3>
               <div className="sizes">
-
-                {sizes.map(
-                  (size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      className={`size-btn ${
-                        selectedSize ===
-                        size
-                          ? "active"
-                          : ""
-                      }`}
-                      onClick={() =>
-                        setSelectedSize(
-                          size
-                        )
-                      }
-                    >
-                      {size}
-                    </button>
-                  )
-                )}
-
+                {sizes.map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    className={`size-btn ${selectedSize === size ? "active" : ""}`}
+                    onClick={() => setSelectedSize(size)}
+                  >
+                    {size}
+                  </button>
+                ))}
               </div>
             </>
           )}
-
-          {/* COLORS */}
 
           {colors.length > 0 && (
             <>
-              <h3>
-                Color
-              </h3>
-
+              <h3>Color</h3>
               <div className="colors">
+                {colors.map((color, index) => {
+                  const name = getColorName(color, index);
+                  const code = getColorCode(color);
 
-                {colors.map(
-                  (
-                    color,
-                    index
-                  ) => {
-
-                    const name =
-                      getColorName(
-                        color,
-                        index
-                      );
-
-                    const code =
-                      getColorCode(
-                        color
-                      );
-
-                    return (
-                      <button
-                        key={`${name}-${index}`}
-                        type="button"
-                        aria-label={
-                          name
-                        }
-                        title={
-                          name
-                        }
-                        className={`color ${
-                          isColorActive(
-                            color
-                          )
-                            ? "active"
-                            : ""
-                        }`}
-                       style={{
-  "--swatch-color": code,
-} as React.CSSProperties}
-                        onClick={() =>
-                          handleColorChange(
-                            color
-                          )
-                        }
-                      />
-                    );
-                  }
-                )}
-
+                  return (
+                    <button
+                      key={`${name}-${index}`}
+                      type="button"
+                      aria-label={name}
+                      title={name}
+                      className={`color ${isColorActive(color) ? "active" : ""}`}
+                      style={{ "--swatch-color": code } as React.CSSProperties}
+                      onClick={() => handleColorChange(color)}
+                    />
+                  );
+                })}
               </div>
             </>
           )}
 
-          {/* HIDDEN MESSAGES */}
-
-          {hiddenMessages.length >
-            0 && (
+          {hiddenMessages.length > 0 && (
             <>
-              <h3>
-                Hidden Messages
-              </h3>
-
+              <h3>Hidden Messages</h3>
               <button
                 type="button"
-                className={`select-message-btn ${
-                  includeHiddenMessage
-                    ? "active"
-                    : ""
-                }`}
-                onClick={() =>
-                  setIncludeHiddenMessage(
-                    (prev) =>
-                      !prev
-                  )
-                }
+                className={`select-message-btn ${includeHiddenMessage ? "active" : ""}`}
+                onClick={() => setIncludeHiddenMessage((prev) => !prev)}
               >
                 {includeHiddenMessage
                   ? "✔ Hidden Message Selected"
@@ -1132,36 +542,25 @@ window.dispatchEvent(
               {includeHiddenMessage && (
                 <>
                   <div className="hidden-message-box">
-
                     <button
                       type="button"
                       className="arrow-btn"
                       onClick={() =>
-                        setSelectedMessage(
-                          (prev) =>
-                            prev === 0
-                              ? hiddenMessages.length -
-                                1
-                              : prev - 1
+                        setSelectedMessage((prev) =>
+                          prev === 0 ? hiddenMessages.length - 1 : prev - 1
                         )
                       }
                     >
                       ←
                     </button>
 
-                    {isValidImageUrl(
-                      currentHiddenMessage
-                    ) && (
+                    {isValidImageUrl(currentHiddenMessage) && (
                       <div className="hidden-preview-wrapper">
-
                         <img
-                          src={
-                            currentHiddenMessage
-                          }
+                          src={currentHiddenMessage}
                           alt="Hidden Message"
                           className="hidden-preview"
                         />
-
                       </div>
                     )}
 
@@ -1169,50 +568,32 @@ window.dispatchEvent(
                       type="button"
                       className="arrow-btn"
                       onClick={() =>
-                        setSelectedMessage(
-                          (prev) =>
-                            prev ===
-                            hiddenMessages.length -
-                              1
-                              ? 0
-                              : prev + 1
+                        setSelectedMessage((prev) =>
+                          prev === hiddenMessages.length - 1 ? 0 : prev + 1
                         )
                       }
                     >
                       →
                     </button>
-
                   </div>
 
                   <p className="message-counter">
-                    {selectedMessage +
-                      1}{" "}
-                    /{" "}
-                    {
-                      hiddenMessages.length
-                    }
+                    {selectedMessage + 1} / {hiddenMessages.length}
                   </p>
                 </>
               )}
             </>
           )}
 
-          {/* ADD TO CART */}
-
           <button
             type="button"
             className="add-cart-btn"
-            onClick={
-              addToCart
-            }
+            onClick={addToCart}
           >
             Add To Cart
           </button>
-
         </div>
-
       </section>
-
     </main>
   );
 }
